@@ -184,54 +184,78 @@ struct Managed(Child);
 impl Drop for Managed {
     fn drop(&mut self){let _=self.0.kill();let _=self.0.wait();}
 }
-/// Isolated analysis process: model changes cannot leave an old NN loaded.
-/// Intermediate results use the same response format as the final result.
-pub fn analyze<F:FnMut(&Analysis)>(profile:&Profile,b:&Position,l:&Limits,cancel:&AtomicBool,mut progress:F)->Result<Analysis>{
-    let q=make_query(profile,b,l)?;
-    let mut cmd=profile.command("analysis")?;
-    let mut child=Managed(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
-        .spawn().map_err(|e|format!("Engine launch failed: {e}"))?);
-    let stdout=child.0.stdout.take().ok_or("Missing stdout")?;
-    let stderr=child.0.stderr.take().ok_or("Missing stderr")?;
-    let (tx,rx)=mpsc::channel::<String>();
-    thread::spawn(move||{for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok){if tx.send(line).is_err(){break}}});
-    let log=std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::<String>::new()));
-    let stderr_log=log.clone();
-    thread::spawn(move||{for line in BufReader::new(stderr).lines().map_while(std::result::Result::ok){if let Ok(mut log)=stderr_log.lock(){if log.len()>=12{log.pop_front();}log.push_back(line);}}});
-    let mut input=child.0.stdin.take().ok_or("Missing stdin")?;
-    writeln!(input,"{q}").and_then(|_|input.flush()).map_err(|e|format!("Engine input: {e}"))?;
-    let deadline=Instant::now()+Duration::from_secs_f64(l.seconds+180.0);
-    let mut last:Option<Analysis>=None;
-    loop {
-        if cancel.load(Ordering::Relaxed){return last.ok_or_else(||"Search cancelled before first result".into())}
-        if Instant::now()>=deadline{return last.ok_or_else(||"Engine startup/search timed out".into())}
-        match rx.recv_timeout(Duration::from_millis(75)) {
-            Ok(line)=>{
-                let v:Value=match serde_json::from_str(&line){Ok(v)=>v,Err(_)=>continue};
-                if v.get("id").and_then(Value::as_str)!=Some("studio"){continue}
-                if let Some(e)=v.get("error"){return Err(format!("KataGomo: {e}"))}
-                if let Some(w)=v.get("warning"){
-                    // Never silently analyze a different ruleset.
-                    if v.get("field").and_then(Value::as_str)==Some("rules")||w.to_string().contains("not supported by neural net"){
-                        return Err(format!("Model/rule incompatibility: {w}"))
+/// Owns one engine process for a single job, including multi-position searches.
+/// Drop always terminates/reaps it. Requests are sequential with distinct IDs.
+pub(crate) struct AnalysisSession {
+    _child:Managed,
+    input:std::process::ChildStdin,
+    rx:mpsc::Receiver<String>,
+    log:std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    sequence:u64,
+}
+impl AnalysisSession {
+    pub(crate) fn start(profile:&Profile)->Result<Self>{
+        let mut cmd=profile.command("analysis")?;
+        let mut child=Managed(cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+            .spawn().map_err(|e|format!("Engine launch failed: {e}"))?);
+        let stdout=child.0.stdout.take().ok_or("Missing stdout")?;
+        let stderr=child.0.stderr.take().ok_or("Missing stderr")?;
+        let (tx,rx)=mpsc::channel::<String>();
+        thread::spawn(move||{for line in BufReader::new(stdout).lines().map_while(std::result::Result::ok){if tx.send(line).is_err(){break}}});
+        let log=std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::<String>::new()));
+        let stderr_log=log.clone();
+        thread::spawn(move||{for line in BufReader::new(stderr).lines().map_while(std::result::Result::ok){if let Ok(mut log)=stderr_log.lock(){if log.len()>=12{log.pop_front();}log.push_back(line);}}});
+        let input=child.0.stdin.take().ok_or("Missing stdin")?;
+        Ok(Self{_child:child,input,rx,log,sequence:0})
+    }
+    pub(crate) fn query<F:FnMut(&Analysis)>(&mut self,profile:&Profile,b:&Position,l:&Limits,cancel:&AtomicBool,mut progress:F)->Result<Analysis>{
+        if cancel.load(Ordering::Relaxed){return Err("Search cancelled".into())}
+        let mut q=make_query(profile,b,l)?;
+        self.sequence+=1;
+        let id=format!("studio-{}",self.sequence);
+        q["id"]=json!(id);
+        writeln!(self.input,"{q}").and_then(|_|self.input.flush()).map_err(|e|format!("Engine input: {e}"))?;
+        // Only the first request pays the model initialization allowance.
+        let startup=if self.sequence==1{180.0}else{3.0};
+        let deadline=Instant::now()+Duration::from_secs_f64(l.seconds+startup);
+        let mut last:Option<Analysis>=None;
+        loop {
+            if cancel.load(Ordering::Relaxed){return last.ok_or_else(||"Search cancelled before first result".into())}
+            if Instant::now()>=deadline{return Err("Engine startup/search timed out".into())}
+            match self.rx.recv_timeout(Duration::from_millis(75)) {
+                Ok(line)=>{
+                    let v:Value=match serde_json::from_str(&line){Ok(v)=>v,Err(_)=>continue};
+                    if v.get("id").and_then(Value::as_str)!=Some(id.as_str()){continue}
+                    if let Some(e)=v.get("error"){return Err(format!("KataGomo: {e}"))}
+                    if let Some(w)=v.get("warning"){
+                        if v.get("field").and_then(Value::as_str)==Some("rules")||w.to_string().contains("not supported by neural net"){
+                            return Err(format!("Model/rule incompatibility: {w}"))
+                        }
+                        continue
                     }
-                    continue
+                    if v.get("noResults").and_then(Value::as_bool)==Some(true){
+                        return Err("Engine reported no results".into())
+                    }
+                    if v.get("rootInfo").is_none(){continue}
+                    let a:Analysis=serde_json::from_value(v).map_err(|e|format!("Analysis response: {e}"))?;
+                    progress(&a);
+                    if !a.is_during_search{return Ok(a)}
+                    last=Some(a);
                 }
-                if v.get("noResults").and_then(Value::as_bool)==Some(true){return last.ok_or_else(||"Engine reported no results".into())}
-                if v.get("rootInfo").is_none(){continue}
-                let a:Analysis=serde_json::from_value(v).map_err(|e|format!("Analysis response: {e}"))?;
-                progress(&a);
-                if !a.is_during_search{return Ok(a)}
-                last=Some(a);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout)=>{},
-            Err(mpsc::RecvTimeoutError::Disconnected)=>{
-                let details=log.lock().map(|q|q.iter().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default();
-                return Err(format!("Engine exited before final analysis.\n{details}"))
+                Err(mpsc::RecvTimeoutError::Timeout)=>{},
+                Err(mpsc::RecvTimeoutError::Disconnected)=>{
+                    let details=self.log.lock().map(|q|q.iter().cloned().collect::<Vec<_>>().join("\n")).unwrap_or_default();
+                    return Err(format!("Engine exited before final analysis.\n{details}"))
+                }
             }
         }
     }
 }
+pub fn analyze<F:FnMut(&Analysis)>(profile:&Profile,b:&Position,l:&Limits,cancel:&AtomicBool,progress:F)->Result<Analysis>{
+    make_query(profile,b,l)?;
+    AnalysisSession::start(profile)?.query(profile,b,l,cancel,progress)
+}
+pub mod special;
 #[cfg(test)]
 mod tests {
     use super::*;

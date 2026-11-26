@@ -1,5 +1,6 @@
 //! Local Gomocup/Yixin adapter. Never emits invented alpha-beta search scores.
 use katagomo_core::*;
+use katagomo_core::special::{search_special,SpecialMode,SpecialResult};
 use std::{fs,io::{self,BufRead,Write},process::Stdio,sync::{Arc,atomic::{AtomicBool,Ordering},mpsc},thread,time::{Duration,Instant}};
 fn load_profiles(path:&str)->Result<Vec<Profile>>{
     let s=fs::read_to_string(path).map_err(|e|format!("{path}: {e}"))?;
@@ -17,8 +18,9 @@ fn raw_mode(p:&Profile,mode:&str)->Result<()> {
       .status().map_err(|e|e.to_string())?;
     if status.success(){Ok(())}else{Err(format!("Engine exited: {status}"))}
 }
-#[derive(Clone,Copy)]enum Kind{Move(usize),Forbid,Bench}
-struct Job{cancel:Arc<AtomicBool>,result:mpsc::Receiver<Result<Analysis>>,kind:Kind,start:Instant}
+#[derive(Clone,Copy)]enum Kind{Move(usize),Forbid,Bench,Special(SpecialMode,i32)}
+enum Outcome{Analysis(Analysis),Special(SpecialResult)}
+struct Job{cancel:Arc<AtomicBool>,result:mpsc::Receiver<Result<Outcome>>,kind:Kind,start:Instant}
 struct Adapter{
     path:String,profiles:Vec<Profile>,board:Option<Position>,rule:Rule,limits:Limits,detail:bool,job:Option<Job>,
     self_color:Option<Color>,timeout_turn:f64,timeout_match:f64,time_left:f64,
@@ -36,11 +38,15 @@ impl Adapter{
         let (tx,rx)=mpsc::channel();
         let start=Instant::now();
         thread::spawn(move||{
-            let result=analyze(&p,&b,&limits,&flag,|a|{
+            let result=if let Kind::Special(mode,bias)=kind {
+                search_special(&p,&b,&limits,mode,bias,&flag,|a|{
+                    if detail {print_line(format!("MESSAGE root visits={} black_eval={:.4}",a.root_info.visits,a.root_info.winrate))}
+                }).map(Outcome::Special)
+            }else{analyze(&p,&b,&limits,&flag,|a|{
                 if detail&&matches!(kind,Kind::Move(_)){
                     print_line(format!("MESSAGE visits={} black_eval={:.4}",a.root_info.visits,a.root_info.winrate));
                 }
-            });
+            }).map(Outcome::Analysis)};
             let _=tx.send(result);
         });
         self.job=Some(Job{cancel,result:rx,kind,start});Ok(())
@@ -51,7 +57,31 @@ impl Adapter{
             let j=self.job.take().unwrap();
             match r{
                 Err(e)=>print_line(format!("ERROR {}",e.replace('\n'," "))),
-                Ok(a)=>match j.kind{
+                Ok(Outcome::Special(r))=>{
+                    let b=self.board.as_mut().unwrap();
+                    let label=match r.mode{SpecialMode::BalanceOne=>"YXBALANCEONE",SpecialMode::BalanceTwo=>"YXBALANCETWO",SpecialMode::Defend=>"YXSEARCHDEFEND"};
+                    print_line(format!("MESSAGE {label} branches={} visits={} target_black={} interrupted={}",r.evaluated_branches,r.total_visits,r.target_black.map(|x|format!("{x:.6}")).unwrap_or_else(||"n/a".into()),r.interrupted));
+                    let n=r.lines.len();
+                    for (i,l) in r.lines.iter().enumerate(){
+                        if r.mode!=SpecialMode::Defend&&!self.detail&&i>0{break}
+                        let moves=l.points.iter().map(|p|format!("{},{}",p.x,p.y)).collect::<Vec<_>>().join(" ");
+                        print_line(format!("MESSAGE INFO PV {i}"));
+                        print_line(format!("MESSAGE INFO NUMPV {n}"));
+                        print_line(format!("MESSAGE INFO WINRATE {:.6}",if b.next==Color::B{l.black_eval}else{1.0-l.black_eval}));
+                        print_line(format!("MESSAGE INFO BESTLINE {moves}"));
+                        print_line("MESSAGE INFO PV DONE");
+                        print_line(format!("MESSAGE {label} line={moves} black_eval={:.6} visits={}",l.black_eval,l.visits));
+                    }
+                    if let Some(l)=r.lines.first(){
+                        let mut copy=b.clone();
+                        let result=l.points.iter().try_for_each(|p|copy.play(*p));
+                        match result{
+                            Ok(())=>{*b=copy;print_line(l.points.iter().map(|p|format!("{},{}",p.x,p.y)).collect::<Vec<_>>().join(" "))},
+                            Err(e)=>print_line(format!("ERROR {e}")),
+                        }
+                    }else{print_line("ERROR no evaluated line")}
+                }
+                Ok(Outcome::Analysis(a))=>match j.kind{
                     Kind::Move(n)=>{
                         let b=self.board.as_mut().unwrap();
                         let mut candidates=a.move_infos.clone();candidates.sort_by_key(|c|c.order);
@@ -70,6 +100,7 @@ impl Adapter{
                         }else{print_line("ERROR forbidden-point output requires the patched Gom2024 engine")}
                     }
                     Kind::Bench=>print_line(format!("MESSAGE visits={} wall_seconds={:.3} (includes process/model startup)",a.root_info.visits,j.start.elapsed().as_secs_f64())),
+                    Kind::Special(..)=>print_line("ERROR invalid search response"),
                 }
             }
         }
@@ -147,6 +178,13 @@ impl Adapter{
                 let b=self.board()?;
                 if b.rule!=Rule::Renju||b.next!=Color::B{print_line("FORBID .")}else{self.launch(Kind::Forbid)?}
             }
+            "YXBALANCEONE"|"YXBALANCETWO"=>{
+                let bias:i32=if arg.is_empty(){0}else{arg.parse().map_err(|_|"Invalid balance bias")?};
+                katagomo_core::special::target_black(self.board()?.next,bias)?;
+                let mode=if cmd=="YXBALANCEONE"{SpecialMode::BalanceOne}else{SpecialMode::BalanceTwo};
+                self.launch(Kind::Special(mode,bias))?
+            }
+            "YXSEARCHDEFEND"=>self.launch(Kind::Special(SpecialMode::Defend,0))?,
             "YXSHOWINFO"=>{self.detail=true;print_line("MESSAGE KataGomo MCTS; coordinates are zero-based x,y")},
             "YXHASHCLEAR"=>{/* Every request starts an isolated engine with a fresh cache. */},
             "RELOADCONFIG"=>{self.profiles=load_profiles(&self.path)?;print_line("MESSAGE profiles/config reloaded")},
