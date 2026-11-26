@@ -12,12 +12,14 @@ const coord=(x,y)=>letters[x]+(size-y);
 function parseCoord(c){const x=letters.indexOf(c[0]),y=size-Number(c.slice(1));return x>=0&&x<size&&y>=0&&y<size?{x,y}:null}
 function pos(){return{size,rule,stones:stones.map(s=>({...s})),next:next(),excluded:[],history_known:true}}
 function status(s){$("status").textContent=s}
-function setBusy(b){busy=b;for(const id of ["rule","size","new","undo","save","best","analyze","profile-save","profile-remove","auto"])$(id).disabled=b;$("stop").disabled=!b;}
+function setBusy(b){busy=b;for(const id of ["rule","size","new","undo","save","best","analyze","profile-save","profile-remove","profiles-export","profiles-import","auto"])$(id).disabled=b;$("stop").disabled=!b;}
 function current(){return profiles.find(p=>p.size===size&&p.rule===rule)}
 function readProfile(){let p=current();$("profile-key").textContent=key()+" · "+(p?"등록됨":"미등록");$("exe").value=p?.executable||"";$("model").value=p?.model||"";$("config").value=p?.config||"";$("extra").value=JSON.stringify(p?.extra_rules||{});}
 function persist(){localStorage.setItem("kata-profiles-v1",JSON.stringify(profiles));readProfile()}
 $("profile-save").onclick=()=>{try{let extra=JSON.parse($("extra").value);if(!extra||Array.isArray(extra)||typeof extra!=="object")throw Error("추가 룰은 JSON 객체여야 합니다.");let p={rule,size,executable:$("exe").value.trim(),model:$("model").value.trim(),config:$("config").value.trim(),extra_rules:extra};if(!p.executable||!p.model||!p.config)throw Error("세 경로를 모두 지정하세요.");profiles=profiles.filter(p=>p.rule!==rule||p.size!==size);profiles.push(p);persist();status("프로필 저장됨");}catch(e){status(String(e))}};
 $("profile-remove").onclick=()=>{profiles=profiles.filter(p=>p.rule!==rule||p.size!==size);persist()};
+$("profiles-export").onclick=async()=>{try{const path=await api.dialog.save({defaultPath:"profiles.json",filters:[{name:"JSON",extensions:["json"]}]});if(path){await invoke("export_profiles",{path,profiles});status("프로필 내보내기 완료")}}catch(e){status(String(e))}};
+$("profiles-import").onclick=async()=>{try{const path=await api.dialog.open({multiple:false,filters:[{name:"JSON",extensions:["json"]}]});if(typeof path==="string"){const imported=await invoke("import_profiles",{path});if(!confirm("현재 프로필을 가져온 목록으로 교체할까요?"))return;profiles=imported;persist();status("프로필 불러오기 완료")}}catch(e){status(String(e))}};
 for(const b of document.querySelectorAll("[data-pick]"))b.onclick=async()=>{try{const result=await api.dialog.open({multiple:false,directory:false});if(typeof result==="string")$(b.dataset.pick).value=result}catch(e){status(String(e))}};
 function clearAnalysis(){analysis=null;highlight=null;renderAnalysis()}
 function reset(){stones=[];history=[];clearAnalysis();draw();renderMoves()}

@@ -64,6 +64,9 @@ def main():
             replace(target / "cpp/game/rules.cpp",
                     "Rules::updateRules(key, iter.value(), rules);",
                     "string value = iter.value().is_string() ? iter.value().get<string>() : iter.value().dump();\n        rules = Rules::updateRules(key, value, rules);")
+            replace(target / "cpp/game/rules.cpp",
+                    'ret["sixwinrule"] = writeSixWinRule(sixWinRule);',
+                    'ret["sixwinrule"] = writeSixWinRule(sixWinRule);\n  ret["wallblock"] = wallBlock;')
         if args.build:
             build = target / ("build-" + args.backend.lower())
             run("cmake", "-S", target / "cpp", "-B", build, "-DCMAKE_BUILD_TYPE=Release",

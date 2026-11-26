@@ -36,8 +36,24 @@ fn save_sgf(path:String,position:Position)->Result<(),String>{
     sgf.push(')');
     std::fs::write(path,sgf).map_err(|e|e.to_string())
 }
+#[tauri::command]
+fn export_profiles(path:String,profiles:Vec<Profile>)->Result<(),String>{
+    let bytes=serde_json::to_vec_pretty(&profiles).map_err(|e|e.to_string())?;
+    std::fs::write(path,bytes).map_err(|e|e.to_string())
+}
+#[tauri::command]
+fn import_profiles(path:String)->Result<Vec<Profile>,String>{
+    let bytes=std::fs::read(path).map_err(|e|e.to_string())?;
+    let profiles:Vec<Profile>=serde_json::from_slice(&bytes).map_err(|e|e.to_string())?;
+    for p in &profiles {
+        core::check_size(p.size)?;
+        p.rules()?;
+        core::profile_for(&profiles,p.rule,p.size)?;
+    }
+    Ok(profiles)
+}
 fn main(){
     tauri::Builder::default().manage(Running::default()).plugin(tauri_plugin_dialog::init())
-      .invoke_handler(tauri::generate_handler![analyze,stop,save_sgf])
+      .invoke_handler(tauri::generate_handler![analyze,stop,save_sgf,export_profiles,import_profiles])
       .run(tauri::generate_context!()).expect("error while running KataGomo Studio");
 }

@@ -1,5 +1,11 @@
 name: Patched KataGomo engine
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/prepare_engine.py'
+      - 'scripts/smoke_engine.py'
+      - '.github/workflows/engine.yml'
   workflow_dispatch:
     inputs:
       real_model_smoke:
@@ -17,7 +23,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libeigen3-dev zlib1g-dev libzip-dev
       - run: python scripts/prepare_engine.py --build --backend EIGEN --jobs 2
       - name: Test real network
-        if: inputs.real_model_smoke
+        if: github.event_name == 'workflow_dispatch' && inputs.real_model_smoke
         run: |
           python scripts/prepare_engine.py --branch Gom2024 --download-renju
           python scripts/smoke_engine.py
@@ -28,6 +34,34 @@ jobs:
             engines/Gom2024/build-eigen/katago
             engines/Gom2024/LICENSE
             engines/Caro2024/build-eigen/katago
+            engines/Caro2024/LICENSE
+            config/analysis.cfg
+          if-no-files-found: error
+  windows-engine:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install engine libraries
+        run: vcpkg install eigen3:x64-windows zlib:x64-windows
+      - name: Compile both engines with board limit 19
+        shell: pwsh
+        run: |
+          python scripts/prepare_engine.py --build --backend EIGEN --jobs 2 "--cmake-arg=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" "--cmake-arg=-DVCPKG_TARGET_TRIPLET=x64-windows"
+      - name: Test real model
+        if: github.event_name == 'workflow_dispatch' && inputs.real_model_smoke
+        run: |
+          python scripts/prepare_engine.py --branch Gom2024 --download-renju
+          python scripts/smoke_engine.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KataGomo-Eigen-Windows
+          path: |
+            engines/Gom2024/build-eigen/Release/katago.exe
+            engines/Gom2024/build-eigen/Release/*.dll
+            engines/Gom2024/LICENSE
+            engines/Caro2024/build-eigen/Release/katago.exe
+            engines/Caro2024/build-eigen/Release/*.dll
             engines/Caro2024/LICENSE
             config/analysis.cfg
           if-no-files-found: error

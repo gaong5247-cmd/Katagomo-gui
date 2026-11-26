@@ -1,10 +1,11 @@
 """Exercise actual model inference on the patched engine; no mock scores."""
 import json
+import os
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-EXE = ROOT / "engines/Gom2024/build-eigen/katago"
+EXE = ROOT / ("engines/Gom2024/build-eigen/Release/katago.exe" if os.name == "nt" else "engines/Gom2024/build-eigen/katago")
 MODEL = ROOT / "models/zhizi_renju28b_s1600.bin.gz"
 CONFIG = ROOT / "config/analysis.cfg"
 for n in (15, 19):

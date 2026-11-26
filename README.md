@@ -31,11 +31,15 @@ cargo build -p katagomo-core --release
 
 For a faster start on 15×15, use an official compatible executable from [Gomoku release](https://github.com/hzyhhzy/KataGomo/releases/tag/Gomoku_20250206) and the matching model/config. Some release configurations are for GTP; use config/analysis.cfg or an analysis-compatible cfg. For 19×19 and forbidden overlays, build the patched source. Build output paths depend on the generator (e.g. engines/Gom2024/build-eigen/Release/katago.exe or engines/Gom2024/build-eigen/katago).
 
-Select rule and size, browse to engine/model/config, save profile, then press Analyze. Each rule/size uses its saved profile. Caro requires the separate Caro2024 engine. Model weights are not included; register only models known to support the selected game and size. GPU settings live in the chosen config and compiled engine backend.
+Select rule and size, browse to engine/model/config, save profile, then press Analyze. Each rule/size uses its saved profile. Export/import the profile list as JSON to reuse exactly the same settings in the CLI. Caro requires the separate Caro2024 engine. Model weights are not included; register only models known to support the selected game and size. GPU settings live in the chosen config and compiled engine backend.
 
 ## Linux
 
 Install Tauri prerequisites (WebKitGTK 4.1, GTK3, appindicator, librsvg, etc.) plus Eigen3/zlib for a CPU engine build. Use the same Python and npx commands. Core tests: cargo test -p katagomo-core.
+
+## GitHub Actions
+
+The Build and test workflow produces the Windows UI and bridge artifacts; Patched KataGomo engine builds the Eigen CPU engine on Windows and Linux. Download both successful workflow artifacts from the Actions tab. The optional real_model_smoke workflow input tests real official Renju network inference on both sizes, but does not establish that the network was trained for 19×19.
 
 ## CLI
 
