@@ -1,0 +1,30 @@
+[
+  {
+    "rule": "freestyle",
+    "size": 15,
+    "executable": "engines/Gom2024/build-eigen/Release/katago.exe",
+    "model": "models/freestyle15.bin.gz",
+    "config": "config/analysis.cfg"
+  },
+  {
+    "rule": "standard",
+    "size": 15,
+    "executable": "engines/Gom2024/build-eigen/Release/katago.exe",
+    "model": "models/standard15.bin.gz",
+    "config": "config/analysis.cfg"
+  },
+  {
+    "rule": "renju",
+    "size": 15,
+    "executable": "engines/Gom2024/build-eigen/Release/katago.exe",
+    "model": "models/zhizi_renju28b_s1600.bin.gz",
+    "config": "config/analysis.cfg"
+  },
+  {
+    "rule": "caro",
+    "size": 19,
+    "executable": "engines/Caro2024/build-eigen/Release/katago.exe",
+    "model": "models/caro19.bin.gz",
+    "config": "config/analysis.cfg"
+  }
+]

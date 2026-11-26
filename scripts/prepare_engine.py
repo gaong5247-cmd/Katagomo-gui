@@ -41,6 +41,23 @@ def main():
             raise RuntimeError(f"{target}: expected {PINS[branch]}, got {actual}; refusing to overwrite")
         # Both upstream branches default to a compile-time maximum of 15.
         replace(target / "cpp/core/config.h", "#define COMPILE_MAX_BOARD_LEN 15", "#define COMPILE_MAX_BOARD_LEN 19")
+        if branch == "Gom2024":
+            # Report actual upstream Renju forbidden intersections, not guesses
+            # based on policy scores. The array is present in patched results.
+            replace(target / "cpp/command/analysis.cpp",
+                    '    if(success)\n      pushToWrite(new string(ret.dump()));',
+                    '''    if(success) {
+      ret["forbidden"] = json::array();
+      if(request->hist.rules.basicRule == Rules::BASICRULE_RENJU && request->nextPla == C_BLACK) {
+        const Board& b = request->board;
+        for(int y = 0; y < b.y_size; y++) for(int x = 0; x < b.x_size; x++) {
+          Loc loc = Location::getLoc(x,y,b.x_size);
+          if(b.colors[loc] == C_EMPTY && b.isForbidden(loc))
+            ret["forbidden"].push_back(Location::toString(loc,b));
+        }
+      }
+      pushToWrite(new string(ret.dump()));
+    }''')
         if branch == "Caro2024":
             # Upstream discards updateRules' return value and passes JSON directly
             # as string, which breaks boolean/numeric rule values.

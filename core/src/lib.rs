@@ -111,9 +111,10 @@ pub struct Position {
     pub next: Color,
     #[serde(default)]
     pub excluded: Vec<Point>,
+    #[serde(default)] pub history_known: bool,
 }
 impl Position {
-    pub fn new(size: usize, rule: Rule)->Self{Self{size,rule,stones:vec![],next:Color::B,excluded:vec![]}}
+    pub fn new(size: usize, rule: Rule)->Self{Self{size,rule,stones:vec![],next:Color::B,excluded:vec![],history_known:true}}
     pub fn validate(&self)->Result<()>{
         check_size(self.size)?;
         let mut occupied=HashSet::new();
@@ -140,9 +141,10 @@ pub fn make_query(p:&Profile,b:&Position,l:&Limits)->Result<Value>{
     // Gomocup BOARD may supply unordered stones. Initial placements preserve
     // the board without pretending that a sorted position is move history.
     let stones:Vec<_>=b.stones.iter().map(|s|Ok(json!([s.color,to_gtp(s.point(),b.size)?]))).collect::<Result<_>>()?;
+    let (placements,moves,initial_player)=if b.history_known {(vec![],stones,b.stones.first().map(|s|s.color).unwrap_or(b.next))}else{(stones,vec![],b.next)};
     let mut q=json!({"id":"studio","boardXSize":b.size,"boardYSize":b.size,
-        "rules":p.rules()?,"initialStones":stones,"moves":[],
-        "initialPlayer":b.next,"maxVisits":l.visits,"analysisPVLen":16,
+        "rules":p.rules()?,"initialStones":placements,"moves":moves,
+        "initialPlayer":initial_player,"maxVisits":l.visits,"analysisPVLen":16,
         "includePolicy":true,"includePVVisits":true,"reportDuringSearchEvery":0.25,
         "overrideSettings":{"reportAnalysisWinratesAs":"BLACK","maxTime":l.seconds}});
     if !b.excluded.is_empty(){
@@ -168,12 +170,13 @@ pub struct Analysis {
     pub move_infos:Vec<Candidate>,
     #[serde(default)] pub policy:Vec<f64>,
     #[serde(default)] pub is_during_search:bool,
+    #[serde(default)] pub forbidden:Option<Vec<String>>,
 }
 impl Analysis {
     pub fn best(&self,b:&Position)->Option<Point>{
         self.move_infos.iter().filter_map(|c|{
             let p=from_gtp(&c.coord,b.size).ok()?;
-            if b.excluded.contains(&p)||b.stones.iter().any(|s|s.point()==p){None}else{Some((c.order,p))}
+            if b.excluded.contains(&p)||self.forbidden.as_ref().is_some_and(|f|f.contains(&c.coord))||b.stones.iter().any(|s|s.point()==p){None}else{Some((c.order,p))}
         }).min_by_key(|(order,_)|*order).map(|(_,p)|p)
     }
 }
@@ -214,6 +217,7 @@ pub fn analyze<F:FnMut(&Analysis)>(profile:&Profile,b:&Position,l:&Limits,cancel
                     }
                     continue
                 }
+                if v.get("noResults").and_then(Value::as_bool)==Some(true){return last.ok_or_else(||"Engine reported no results".into())}
                 if v.get("rootInfo").is_none(){continue}
                 let a:Analysis=serde_json::from_value(v).map_err(|e|format!("Analysis response: {e}"))?;
                 progress(&a);
@@ -234,7 +238,7 @@ mod tests {
     fn profile(rule:Rule,size:usize)->Profile{Profile{rule,size,executable:"engine".into(),model:"model".into(),config:"cfg".into(),extra_rules:Default::default()}}
     #[test]fn coords(){for n in [15,19]{for y in 0..n{for x in 0..n{let p=Point{x,y};assert_eq!(from_gtp(&to_gtp(p,n).unwrap(),n).unwrap(),p)}}}assert!(from_gtp("I8",15).is_err());assert_eq!(to_gtp(Point{x:18,y:18},19).unwrap(),"T1");}
     #[test]fn profiles_are_exact(){let a=[profile(Rule::Renju,15)];assert!(profile_for(&a,Rule::Renju,19).is_err());assert!(profile_for(&a,Rule::Standard,15).is_err());}
-    #[test]fn query_uses_rules_and_color(){let mut b=Position::new(19,Rule::Renju);b.play(Point{x:9,y:9}).unwrap();let q=make_query(&profile(Rule::Renju,19),&b,&Limits::default()).unwrap();assert_eq!(q["rules"]["basicrule"],"RENJU");assert_eq!(q["initialStones"][0][1],"K10");assert_eq!(q["initialPlayer"],"W");assert_eq!(q["boardXSize"],19);}
+    #[test]fn query_uses_rules_and_color(){let mut b=Position::new(19,Rule::Renju);b.play(Point{x:9,y:9}).unwrap();let q=make_query(&profile(Rule::Renju,19),&b,&Limits::default()).unwrap();assert_eq!(q["rules"]["basicrule"],"RENJU");assert_eq!(q["moves"][0][1],"K10");assert_eq!(q["initialPlayer"],"B");assert_eq!(q["boardXSize"],19);}
     #[test]fn occupied_is_rejected(){let mut b=Position::new(15,Rule::Standard);let p=Point{x:0,y:0};b.play(p).unwrap();assert!(b.play(p).is_err());}
     #[test]fn caro_is_separate(){assert_eq!(Rule::Caro.engine_rules()["sixwinrule"],"SIXWINRULE_CARO");}
     #[test]fn invalid_rule_override(){let mut p=profile(Rule::Renju,15);p.extra_rules.insert("basicrule".into(),json!("STANDARD"));assert!(p.rules().is_err());}
