@@ -1,0 +1,8 @@
+/target/
+/engines/
+/models/*
+!/models/README.md
+/src-tauri/icons/
+/src-tauri/gen/
+/analysis_logs/
+node_modules/
