@@ -8,6 +8,7 @@ Native Rust + Tauri 2 local Gomoku analysis workbench using the real [KataGomo](
 - Per-rule **and per-board-size** executable, config, model mapping. No silent fallback to an unrelated network.
 - Real KataGomo JSON analysis, interim results, visits, black-perspective expected result (win + half draw), candidate draw rate, PV, candidate overlay, history plot.
 - Human/AI moves, undo, analysis cancellation, SGF export.
+- Balance-one, balance-two and defensive candidate searches in the UI and CLI bridge, using real neural analysis and a bounded candidate beam; configurable bias and explicit line preview/apply.
 - CLI protocol bridge, see [protocol compatibility](docs/protocols.md).
 - Pinned upstream source preparation; patch compile-time board limit 15 → 19, correct Caro rule parsing, expose Renju forbidden intersections.
 

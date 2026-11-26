@@ -14,12 +14,17 @@ def run(*args):
     subprocess.run([str(x) for x in args], check=True)
 
 def replace(path, old, new):
-    content = path.read_text(encoding="utf-8")
+    # Some upstream files contain legacy GBK comments. Keep every unrelated
+    # byte and original newline style intact, instead of decoding as UTF-8.
+    content = path.read_bytes()
+    newline = b"\r\n" if b"\r\n" in content else b"\n"
+    old = old.encode("ascii").replace(b"\n", newline)
+    new = new.encode("ascii").replace(b"\n", newline)
     if new in content:
         return
     if content.count(old) != 1:
         raise RuntimeError(f"Unexpected source in {path}; refusing to patch")
-    path.write_text(content.replace(old, new), encoding="utf-8")
+    path.write_bytes(content.replace(old, new))
 
 def main():
     p = argparse.ArgumentParser()

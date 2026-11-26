@@ -21,6 +21,21 @@ async fn analyze(app:tauri::AppHandle,state:State<'_,Running>,profiles:Vec<Profi
     result.map_err(|e|e.to_string())?
 }
 #[tauri::command]
+async fn special_search(app:tauri::AppHandle,state:State<'_,Running>,profiles:Vec<Profile>,position:Position,limits:Limits,mode:core::special::SpecialMode,bias:i32)->Result<core::special::SpecialResult,String>{
+    let profile=core::profile_for(&profiles,position.rule,position.size)?;
+    let cancel=Arc::new(AtomicBool::new(false));
+    {
+        let mut active=state.0.lock().map_err(|_|"Search lock poisoned")?;
+        if active.is_some(){return Err("Search already active".into())}
+        *active=Some(cancel.clone());
+    }
+    let result=tauri::async_runtime::spawn_blocking(move||{
+        core::special::search_special(&profile,&position,&limits,mode,bias,&cancel,|a|{let _=app.emit("analysis-progress",a);})
+    }).await;
+    *state.0.lock().map_err(|_|"Search lock poisoned")?=None;
+    result.map_err(|e|e.to_string())?
+}
+#[tauri::command]
 fn stop(state:State<'_,Running>)->Result<(),String>{
     if let Some(flag)=state.0.lock().map_err(|_|"Search lock poisoned")?.as_ref(){flag.store(true,Ordering::Relaxed)}
     Ok(())
@@ -54,6 +69,6 @@ fn import_profiles(path:String)->Result<Vec<Profile>,String>{
 }
 fn main(){
     tauri::Builder::default().manage(Running::default()).plugin(tauri_plugin_dialog::init())
-      .invoke_handler(tauri::generate_handler![analyze,stop,save_sgf,export_profiles,import_profiles])
+      .invoke_handler(tauri::generate_handler![analyze,special_search,stop,save_sgf,export_profiles,import_profiles])
       .run(tauri::generate_context!()).expect("error while running KataGomo Studio");
 }
