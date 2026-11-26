@@ -1,0 +1,42 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo test -p katagomo-core
+      - run: node --input-type=module --check < ui/app.js
+      - run: python -m py_compile scripts/prepare_engine.py
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cargo test -p katagomo-core
+      - run: npx --yes @tauri-apps/cli@2 icon assets/icon.svg
+      - run: npx --yes @tauri-apps/cli@2 build --no-bundle
+      - run: cargo build -p katagomo-core --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Katagomo-gui-windows-x64
+          path: |
+            target/release/katagomo-gui.exe
+            target/release/katagomo-bridge.exe
+            config/analysis.cfg
+            profiles.example.json
+            README.md
+          if-no-files-found: error
